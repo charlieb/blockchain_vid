@@ -45,21 +45,30 @@ def test_crypto():
     txt = b'My Awesome Message for a transaction'
     signature = sign(prv_key, txt)
     print(signature)
-    print(verify(pub_key, signature, txt))
-    # Damage the signature so verification fails
     signature = signature[:24] + b'0' + signature[25:]
     print(verify(pub_key, signature, txt))
 
-#---------------------------------------------
 
+
+# -----------------------------
 def get_tx(bc, txid):
     return bc[txid]
-def mk_tx(txid, inputs, outputs):
-    return {'txid': txid, 'inputs': inputs, 'outputs': outputs}
+def mk_tx(txid, inputs, pubkeys, outputs):
+    return {'txid': txid, 'inputs': inputs, 'pubkeys': pubkeys, 'outputs': outputs, 
+            'signatures': []}
 def mk_input(txid, output):
     return {'txid': txid, 'output': output}
 def mk_output(address, amount):
     return {'address': address, 'amount':amount}
+
+def tx_to_bytes(tx):
+    return b''.join([str(inp).encode() for inp in tx['inputs']] +
+                    tx['pubkeys'] +
+                    [str(out).encode() for out in tx['outputs']])
+
+def sign_tx(tx, privkeys):
+    message = tx_to_bytes(tx)
+    tx['signatures'] = [sign(p, message) for p in privkeys]
 
 def verify_chain(bc):
     utxos = set()
@@ -81,24 +90,53 @@ def verify_chain(bc):
             print('Error inputs < outputs in tx\n%s'%tx)
             return False
 
+        if not verify_sig(bc, tx):
+            return False
+
         utxos -= set((inp['txid'], inp['output']) for inp in tx['inputs'])
         utxos |= set((tx['txid'], i) for i, _ in enumerate(tx['outputs']))
 
     return True
 
+def verify_sig(bc, tx):
+    # Verify address corresponds to pubic key given
+    pubkeys = [txt_pub(p) for p in tx['pubkeys']]
+    for inp, pubkey in zip(tx['inputs'], pubkeys):
+        if address(pubkey) != get_tx(bc, inp['txid'])['outputs'][inp['output']]['address']:
+            print('Invalid Tx - pubkey to address mismatch\n%s'%tx)
+            return False
+
+    for sig, pubkey in zip(tx['signatures'], pubkeys):
+        message = tx_to_bytes(tx)
+        if not verify(pubkey, sig, message):
+            print('Invalid Tx - bad signature\n%s'%tx)
+            return False
+
+    return True
+
 def main():
 
+    a,b,c = new_key(), new_key(), new_key()
+    a_addr = address(a.public_key())
+    b_addr = address(b.public_key())
+    c_addr = address(c.public_key())
+    bad_addr = c_addr[:5] + b'1' + c_addr[6:]
+
     bc = []
-    bc.append(mk_tx(0, [], [mk_output('one', 100)]))
+    bc.append(mk_tx(0, [], [], [mk_output(a_addr, 100)]))
 
     bc.append(mk_tx(1, [mk_input(0,0)],
-                       [mk_output('two', 30), mk_output('three', 70)]))
+                       [pub_txt(a.public_key())],
+                       [mk_output(b_addr, 30), mk_output(c_addr, 70)]))
+    sign_tx(bc[1], [a])
 
     bc.append(mk_tx(2, [mk_input(1,1), mk_input(1,0)], 
-                       [mk_output('one', 100)]))
+                       [pub_txt(c.public_key()), pub_txt(b.public_key())],
+                       [mk_output(a_addr, 100)]))
+    sign_tx(bc[2], [c, b])
 
     res = verify_chain(bc)
     print(res)
 
 if __name__ == '__main__':
-    test_crypto()
+    main()
