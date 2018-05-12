@@ -81,6 +81,14 @@ def sign_tx(tx, privkeys):
     message = tx_to_bytes(tx)
     tx['signatures'] = [sign(p, message) for p in privkeys]
 
+def txid(tx):
+    return b64encode(
+            sha256(b''.join(str(x).encode() for x in
+                tx['inputs'] +
+                tx['pubkeys'] + 
+                tx['outputs'] + 
+                tx['signatures'])))
+
 def verify_sig(state, tx):
     # Verify address corresponds to pubic key given
     pubkeys = [txt_pub(p) for p in tx['pubkeys']]
@@ -137,6 +145,40 @@ def verify_chain(state, bc):
 
 # ---------------------------------------------------
 
+def mk_block(bc):
+    return {
+            'header': {
+                'number': len(bc),
+                'prev_block_hash': '',
+                'merkle_root': '',
+                'difficulty': 1,
+                'nonce': 0,
+                },
+            'txes': []
+            }
+
+def merkle_root(txes):
+    def merkle_root_r(hashes):
+        print(len(hashes))
+        if len(hashes) == 1: return b64encode(hashes[0])
+        next_hashes = []
+        first = None
+        for h in hashes:
+            if first is None:
+                first = h
+            else:
+                next_hashes.append(sha256(first + h))
+                first = None
+        if first is not None:
+            next_hashes.append(sha256(first + first))
+
+        return merkle_root_r(next_hashes)
+
+    return merkle_root_r([b64decode(txid(tx)) for tx in txes]) 
+
+
+# ---------------------------------------------------
+
 def gen_tx(state, txes, addr_keys):
     keys = [new_key() for _ in range(random.randint(1,5))]
     utxos = random.sample(tuple(state['utxos']), random.randint(1,min(len(state['utxos']), 5)))
@@ -157,7 +199,8 @@ def gen_tx(state, txes, addr_keys):
                [pub_txt(key.public_key()) for key in utxo_keys],
                [mk_output(address(k.public_key()), amt) for k, amt in zip(keys, amts)])
     sign_tx(tx, utxo_keys)
-    
+    tx['txid'] = txid(tx)
+
     if not verify_tx(state, tx):
         print('gen_tx Failed')
         return False
@@ -178,29 +221,35 @@ def main():
     bad_addr = c_addr[:5] + b'1' + c_addr[6:]
 
     bc = []
-    bc.append(mk_tx([], [], [mk_output(a_addr, 100000)]))
+    bc.append(mk_tx([], [], [mk_output(a_addr, 1000000)]))
+    bc[-1]['txid'] = txid(bc[-1])
     update_state(state, bc[-1])
 
     bc.append(mk_tx([mk_input(bc[-1]['txid'],0)],
                     [pub_txt(a.public_key())],
-                    [mk_output(b_addr, 30), mk_output(c_addr, 70)]))
+                    [mk_output(b_addr, 300000), mk_output(c_addr, 700000)]))
     sign_tx(bc[-1], [a])
+    bc[-1]['txid'] = txid(bc[-1])
     update_state(state, bc[-1])
 
     bc.append(mk_tx([mk_input(bc[-1]['txid'],1), mk_input(bc[-1]['txid'],0)], 
                     [pub_txt(c.public_key()), pub_txt(b.public_key())],
-                    [mk_output(a_addr, 100)]))
+                    [mk_output(a_addr, 1000000)]))
     sign_tx(bc[-1], [c, b])
+    bc[-1]['txid'] = txid(bc[-1])
     update_state(state, bc[-1])
 
     addr_keys = {a_addr: prv_txt(a),
                  b_addr: prv_txt(b),
                  c_addr: prv_txt(c),
                  }
-    gen_tx(state, bc, addr_keys)
+    for _ in range(50):
+        gen_tx(state, bc, addr_keys)
 
     res, state = verify_chain(state, bc)
     print(res)
+
+    print(merkle_root(bc))
 
 if __name__ == '__main__':
     main()
